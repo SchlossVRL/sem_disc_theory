@@ -1,0 +1,632 @@
+---
+title: "cb assignment"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+
+
+```{r}
+library(tidyverse)
+library(R.matlab)
+library(FactoMineR)
+library(plotrix)
+library(GPArotation) 
+library(psy)
+library(psych)
+library(png)
+library(grid)
+library(gtools)
+library(factoextra)
+library(gridExtra)
+library(tidytext)
+library(ggthemes)
+
+library(lme4)
+library(lmerTest)
+library(lmSupport)
+
+```
+
+```{r}
+
+setwd('/Users/kushin/Documents/GitHub/colorability_assignment/')
+clean_df_f <- read.csv('clean_df_f.csv') ### raw data with outliers etc removed.
+cdict<- read.csv('cdict.csv') ### color dict for each concept in each palette
+
+
+item_df = read.csv('item_level_df.csv') ### dataframe with responses at the level of individual trials: 90*64
+item_df$X <-NULL
+model_set_acc <- read.csv('model_set_acc.csv')
+data_set_acc <-read.csv('setwise_accuracies.csv')
+pal_TVS <-read.csv('concept_set_TVs.csv')
+d<-read.csv('colorability_raw_2.csv')
+d_<-read.csv('uw71assoc.csv')
+color_dict_df = read.csv('uw_71_color_dict.csv') ### dataframe of all uw71 colors and their corresponding indices
+col2ind<- color_dict_df$index
+names(col2ind)<-color_dict_df$hex
+
+reg_df_avg = read.csv('reg_df_avg.csv')
+reg_df_avg$X<-NULL
+
+ratings_mat<- read.csv('uw_71_ratings_matrix.csv')
+ratings_mat$X<-as.character(ratings_mat$X)
+
+
+
+cdict$X<-NULL
+cdict_vec<- as.character(cdict$hex)
+names(cdict_vec)<-as.character(cdict$con_pal_conc)
+```
+
+
+------
+
+
+
+```{r}
+
+summary_df<- item_df%>%group_by(concept,pal,pal_conc,source)%>%summarize(mean_acc = mean(accuracy), sem = sd(accuracy)/sqrt(n()))
+summary_df[is.na(summary_df)] <- 0
+summary_df$pal<-as.character(summary_df$pal)
+```
+
+
+
+Plotting model accuracy vs human accuracy for all 64 color-concept pairs 
+```{r}
+
+
+p<-ggplot(data =summary_df, aes(x=source,y = mean_acc, group = pal, fill = pal_conc))+
+  geom_bar(stat='identity',position = position_dodge(0.95), col='black')+
+  geom_hline(yintercept= 0.25, linetype = "dashed", col='black')  + 
+  geom_errorbar(position = position_dodge(0.95),aes( ymin = mean_acc - sem, ymax = mean_acc+sem), width= 0)+
+  facet_wrap(~concept, scales = "free_x")+geom_hline(yintercept= 0.5,linetype = "dashed", col='red')+
+  theme_classic()  +
+  scale_fill_manual(values=cdict_vec) +
+  theme(legend.position = "none",
+        axis.text=element_text(size=10), 
+        axis.title=element_text(size=10,face="bold"), 
+        strip.text = element_text(size=10,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=10)) +ylim(0,1)
+p
+
+
+#ggsave(
+#  paste0('item_acc_plot.pdf'),
+#  plot = p,
+#  device = "pdf",
+#  scale = 1,
+#  width = 7,
+#  height = 5,
+#  dpi = 150,
+#  limitsize = TRUE
+#)
+```
+
+
+Check orrelation between model and human accuracy 
+```{r}
+
+
+data_acc <- summary_df%>%filter(source=='data')%>%select(mean_acc)
+model_acc<- summary_df%>%filter(source=='model')%>%select(mean_acc)
+cor(data_acc$mean_acc,model_acc$mean_acc)
+```
+
+
+
+
+
+```{r}
+
+reg_df_avg$concept_x<- as.character(reg_df_avg$concept_x)
+
+model_df <-reg_df_avg%>%group_by(pal_x,concept_x, bar_col)%>%summarize(mean_acc = mean(accuracy_x), distance = mean(distance)) ##for groupwise regression models
+
+
+model_df_subj <-reg_df_avg%>%group_by(subject_id, pal_x,concept_x, bar_col)%>%summarize(mean_acc = mean(accuracy_x), distance = mean(distance)) ##for subject wise mixed effects models
+
+model_df$bar_col<-as.character(model_df$bar_col)
+model_df_subj$bar_col<-as.character(model_df_subj$bar_col)
+reg_df_avg$bar_col<-as.character(reg_df_avg$bar_col)
+
+
+## Center semantic contrast 
+model_df_subj$distance_c <- model_df_subj$distance -mean(model_df_subj$distance)
+
+## Add association ratings between concept and target color
+
+inf_ratings =c()
+for(i in 1:nrow(model_df)){
+inf_ratings[i] = ratings_mat[ ratings_mat$X ==model_df$concept_x[i] ,-1][col2ind[model_df$bar_col[i]]]
+}
+
+reg_inf_ratings =c()
+for(i in 1:nrow(reg_df_avg)){
+reg_inf_ratings[i] = ratings_mat[ ratings_mat$X ==reg_df_avg$concept_x[i] ,-1][col2ind[reg_df_avg$bar_col[i]]]
+}
+
+subj_inf_ratings =c()
+for(i in 1:nrow(model_df_subj)){
+subj_inf_ratings[i] = ratings_mat[ ratings_mat$X ==model_df_subj$concept_x[i] ,-1][col2ind[model_df_subj$bar_col[i]]]
+}
+
+
+
+inf_ratings<-unlist(inf_ratings)
+reg_inf_ratings<-unlist(reg_inf_ratings)
+subj_inf_ratings<-unlist(subj_inf_ratings)
+
+
+model_df$rating <- inf_ratings
+reg_df_avg$rating <- reg_inf_ratings
+model_df_subj$rating<-subj_inf_ratings
+
+
+```
+
+Computing entropies to append to regression dataframes
+
+```{r}
+p_mat = ratings_mat
+
+get_ents<-function(x){
+  l={}
+  for(item in x){
+    l<-rbind(l,entropies_c[item])
+    
+    return(l)
+  }
+  
+}
+
+
+for(i in 1:nrow(p_mat)){
+  p_mat[i,2:ncol(p_mat)]<- p_mat[i,2:ncol(p_mat)]/sum(p_mat[i,2:ncol(p_mat)])
+}
+
+entropies = c()
+for (i in 1:nrow(p_mat)){
+  logs = c()
+  for(j in 2:length(p_mat[i,1:ncol(p_mat)])){
+    if(p_mat[i,j]==0){
+      logs<- append(logs,0)
+    }else{
+    logs<- append(logs, log(p_mat[i,j]))
+    }
+  }
+  entropies<- append(entropies, sum(-logs*p_mat[i,2:ncol(p_mat)]))
+}
+
+names(entropies)<- ratings_mat$X
+
+##Center entropies
+entropies_c <- entropies - mean(entropies)
+
+model_df$entropy_c<- entropies_c[model_df$concept_x]
+model_df_subj$entropy_c<-entropies_c[model_df_subj$concept_x]
+reg_df_avg$entropy_c<- entropies_c[reg_df_avg$concept_x]
+
+
+```
+
+```{r}
+con_clist = c('corn','carrot','eggplant','celery','grape','banana','peach','cherry')
+abs_clist = c('sleeping','driving','working','leisure','efficiency','speed','safety','comfort')
+
+p1 = c('corn','carrot','grape','banana')
+p2 =c('sleeping','driving','peach','cherry')
+p3 = c('working','leisure','safety','comfort')
+p4 = c('eggplant','celery','efficiency','speed')
+p5= c('working','leisure','grape','banana')
+p6 = c('eggplant','celery','peach','cherry')
+p7 = c('corn','carrot','safety','comfort')
+p8 = c('sleeping','driving','efficiency','speed')
+
+p9 = c('corn','carrot','peach','cherry')
+p10 = c('sleeping','driving','grape','banana')
+p11 = c('working','leisure','efficiency','speed')
+p12 = c('eggplant','celery','safety','comfort')
+p13 = c('working','leisure','peach','cherry')
+p14 = c('eggplant','celery','grape','banana')
+p15 = c('corn','carrot','efficiency','speed')
+p16 = c('sleeping','driving','safety','comfort')
+
+plist=list(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p11,p12,p13,p14,p15,p16)
+
+#adding information about concreteness and abstractness of concepts
+
+is_conrete<-function(concept_x){if(concept_x%in%con_clist){return(1)}else{return(0)} }
+
+
+context_conrete<- function(pal,concept_con){
+  if(concept_con==1 && pal%in%c(1,3,4,6,9,11,12,14)){
+    return(0)
+  }else if(concept_con==0 && pal%in%c(1,3,4,6,9,11,12,14)){
+    return(1)
+  } else{
+    return(concept_con)
+  }
+}
+
+
+reg_df_avg<- reg_df_avg%>%rowwise()%>%mutate(concreteness = is_conrete(concept_x))
+reg_df_avg<-reg_df_avg%>%mutate(context_concreteness = context_conrete(pal_x, concreteness))
+#clean_df_f<-clean_df_f%>%rowwise()%>%mutate(concept_concreteness = is_conrete(answer))
+
+```
+
+
+Some exploratory models
+
+```{r}
+
+## adding information about total entropy of concepts
+model_df<- model_df%>%group_by(pal_x)%>%mutate(context_H_sum = sum(sapply(concept_x,get_ents)))
+reg_df_avg<- reg_df_avg%>%group_by(subject_id,pal_x)%>%mutate(context_H_sum = sum(sapply(unique(concept_x),get_ents)))
+
+model_df$context_H_sum <- model_df$context_H_sum - model_df$entropy
+reg_df_avg$context_H_sum <- reg_df_avg$context_H_sum - reg_df_avg$entropy
+reg_df_avg$accuracy_x<- factor(reg_df_avg$accuracy_x) # factorizing accuracy for logistic regression models
+
+m1 <- lm(mean_acc~ distance_c+rating, model_df)
+summary(m1)
+
+m2 <- lm(mean_acc~ distance_c+rating+entropy_c, model_df)
+summary(m2)
+
+
+m3 <- lm(mean_acc~ distance_c*entropy_c*context_H_sum, model_df)
+summary(m3)
+
+m4 <- lm(mean_acc~ distance_c + entropy_c+context_H_sum, model_df)
+summary(m4)
+
+
+m5<- glmer(accuracy_x~ rating + distance + entropy*context_H_sum + (1|subject_id), reg_df_avg, family = binomial)
+summary(m5)
+
+## center variables
+reg_df_avg$concreteness<- varRecode(reg_df_avg$concreteness, c(1,0), c(.5, -.5))
+reg_df_avg$context_concreteness<-varRecode(reg_df_avg$context_concreteness, c(1,0), c(.5, -.5))
+
+m6<- glmer(accuracy_x~ concreteness*context_concreteness + (1|subject_id), reg_df_avg, family = binomial)
+summary(m6)
+
+
+
+
+
+reg_df_avg$accuracy_x<- as.numeric(reg_df_avg$accuracy_x) 
+reg_df_avg$accuracy_x<- varRecode(reg_df_avg$accuracy_x, c(1,2),c(0,1))
+
+reg_df_avg%>%group_by(concreteness, context_concreteness)%>%summarize(mean = mean(accuracy_x))%>%ggplot( aes(x = factor(concreteness), y = mean,group= factor(context_concreteness), col = factor(context_concreteness)))+ geom_point() + geom_line()+ylim(0.4, 0.8)
+
+
+
+#p<-reg_df_avg%>%group_by(subject_id,concreteness, context_concreteness)%>%summarize(accuracy_x = mean(accuracy_x))%>%group_by(concreteness, context_concreteness)%>%summarize(mean = mean(accuracy_x),sem = sd(accuracy_x)/sqrt(n()),sd = sd(accuracy_x))%>%ggplot( aes(x = factor(concreteness), y = mean,group= factor(context_concreteness), col = factor(context_concreteness)))+ geom_point(size=0.5) + geom_line()+geom_errorbar(aes(ymin=mean-sem,ymax=mean+sem), width = 0.05)+ theme_classic(base_size = 12)+  theme(legend.position=c(0.8,0.4))+ labs(y = 'mean accuracy', x = 'concept concreteness')+scale_x_discrete(labels = c('abstract','concrete'))+scale_color_tableau( palette = "Tableau 10",name = 'context \nconcreteness',labels = c('abstract','concrete'))+ylim(0, 1)
+#p
+
+#ggsave(
+#  paste0('interaction.pdf'),
+#  plot = p,
+#  device = "pdf",
+#  scale = 1,
+#  width = 3.6,
+#  height = 3,
+#  dpi = 150,
+#  limitsize = TRUE
+#)
+
+
+```
+
+
+```{r}
+
+
+cat_pal<-c('#fcdb42','#ea1d1d', '#512d5f', '#f1a78a','#cc4f1b',  '#8cf47e', '#fcdb42', '#600b84','#ea1d1d', '#f1a78a', '#2e3086', '#83764c','#a06776', '#184415', '#55824d', '#e81a4b')
+names(cat_pal)<-c('banana', 'cherry', 'grape', 'peach','carrot', 'celery', 'corn', 'eggplant','driving', 'leisure', 'sleeping', 'working','comfort', 'efficiency', 'safety','speed')
+
+exp3_df<-model_df_subj%>%group_by( pal_x,concept_x)%>%summarize(mean_accuracy = mean(mean_acc), entropy=mean(entropy), distance = mean(distance), sem = sd(mean_acc)/sqrt(n()),n_in_group = n())
+
+cats<-{}
+for (i in 1:nrow(exp3_df)){
+  if(exp3_df$concept_x[i]%in%c('banana','grape','peach','cherry')){
+    cats<-rbind(cats,'fruits')
+  }else if(exp3_df$concept_x[i]%in%c('carrot','corn','celery','eggplant')){
+    cats<-rbind(cats,'vegetables')
+  }else if(exp3_df$concept_x[i]%in%c("sleeping", "driving" ,   "working"   , "leisure" )){
+    cats<-rbind(cats,'activities')
+  }else if(exp3_df$concept_x[i]%in%c("efficiency", "speed" ,   "safety"   , "comfort" )){
+    cats<-rbind(cats,'features')
+  }
+}
+
+exp3_df$category <-cats
+exp3_df$category <- factor(exp3_df$category, levels = c('fruits','vegetables','activities','features'))
+
+modelsubjTVs={}
+for(i in 1:nrow(model_df_subj)){
+modelsubjTVs<-rbind(modelsubjTVs, pal_TVS[pal_TVS$concept_set_idx==model_df_subj$pal_x[i],]$TV)
+}
+
+model_df_subj$TV<- modelsubjTVs
+exp3_df$distance_c<- exp3_df$distance - mean(exp3_df$distance)
+
+
+p<-ggplot(exp3_df,aes(x=distance, y = mean_accuracy, col=concept_x, group=concept_x))+
+  geom_point()+
+  facet_wrap(.~category, nrow = 1, ncol = 4,scales = 'free_y' )+
+  geom_errorbar(aes(ymin=mean_accuracy-sem, ymax = mean_accuracy+sem))+
+  geom_smooth(aes(group=concept_x, col=concept_x), method="lm", se=FALSE,fullrange=TRUE, size=0.5)+
+  scale_color_manual(values =cat_pal ) +
+  theme_classic(base_size=10)+labs(x='semantic contrast', y ='mean proportion correct')+
+  theme(legend.position='right',  panel.spacing.x = unit(1, "lines"))+
+  scale_x_continuous(expand = c(0, 0),limits=c(0,1)) + scale_y_continuous(expand = c(0, 0),limits = c(0,1))+
+  guides(col=guide_legend(ncol=2))
+
+
+p
+
+#ggsave(
+#  paste0('accuracyVScontrast.svg'),
+#  plot = p,
+#  device = "svg",
+#  scale = 1,
+#  width = 10,
+#  height = 2,
+#  dpi = 150,
+#  limitsize = TRUE
+#)
+```
+
+```{r}
+###More mixed effects models
+
+cats<-{}
+for (i in 1:nrow(reg_df_avg)){
+  if(reg_df_avg$concept_x[i]%in%c('banana','grape','peach','cherry')){
+    cats<-rbind(cats,'fruits')
+  }else if(reg_df_avg$concept_x[i]%in%c('carrot','corn','celery','eggplant')){
+    cats<-rbind(cats,'vegetables')
+  }else if(reg_df_avg$concept_x[i]%in%c("sleeping", "driving" ,   "working"   , "leisure" )){
+    cats<-rbind(cats,'activities')
+  }else if(reg_df_avg$concept_x[i]%in%c("efficiency", "speed" ,   "safety"   , "comfort" )){
+    cats<-rbind(cats,'features')
+  }
+}
+reg_df_avg$category <-cats
+reg_df_avg$category <- factor(reg_df_avg$category, levels = c('fruits','vegetables','activities','features'))
+
+reg_df_avg%>%group_by(subject_id,category)%>%summarize(mean_acc_subj = mean(accuracy_x))%>%group_by(category)%>%summarize(mean_acc = mean(mean_acc_subj), sd_acc = sd(mean_acc_subj))
+
+
+
+m_low_vs_hi<-glmer(accuracy_x~concreteness + distance +(1 + concreteness| subject_id), reg_df_avg, family = binomial)
+
+
+low_vs_hi_df<-reg_df_avg%>%group_by(pal_conc)%>%summarize(mean_dist=mean(distance), concreteness = mean(concreteness))
+
+summary(m_low_vs_hi)
+summary(lm(mean_dist~ concreteness, low_vs_hi_df))
+```
+
+
+
+
+```{r}
+model_df_subj$rating_c<- model_df_subj$rating -mean(model_df_subj$rating)
+model_df_subj$rating_z<- (model_df_subj$rating - mean(model_df_subj$rating))/sd(model_df_subj$rating)
+
+model_df_subj$distance_z<- (model_df_subj$distance - mean(model_df_subj$distance))/sd(model_df_subj$distance)
+
+model_df_subj$entropy_z<- (model_df_subj$entropy - mean(model_df_subj$entropy))/sd(model_df_subj$entropy)
+```
+
+```{r}
+ratings_mat_df<- as.data.frame(ratings_mat)
+ratings_mat_df%>%pivot_longer(!X,names_to = "color", values_to = "rating")
+ratings_mat_df<- ratings_mat_df%>%filter(X%in%c('grape','banana','peach','cherry',
+                                                'corn','carrot','eggplant','celery',
+                                                'working','leisure','sleeping','driving',
+                                              'safety','comfort','efficiency','speed'))
+ratings_mat_df$X <- factor(ratings_mat_df$X, levels =c('grape','banana','peach','cherry',
+                                                'corn','carrot','eggplant','celery',
+                                                'working','leisure','sleeping','driving',
+                                              'safety','comfort','efficiency','speed'))
+
+ratings_mat_df<- ratings_mat_df%>%arrange(X)
+```
+
+
+Generating hillplots
+```{r}
+
+ratings_mat_df_long<-ratings_mat_df%>%pivot_longer(!X,names_to = "color", values_to = "rating")
+ratings_mat_df_long$c_ind <-stringr::str_split_fixed(ratings_mat_df_long$color,'V',2)[,2]
+color_dict<- as.character(color_dict_df$hex)
+names(color_dict)<-color_dict_df$index
+
+
+p<-ggplot(ratings_mat_df_long,  aes(reorder_within(c_ind,-rating, X) ,rating, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='black',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text=element_text(size=5), 
+        axis.title=element_text(size=10,face="bold"), 
+        strip.text = element_text(size=10,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=10))+scale_y_continuous(expand = c(0,0)) +labs(x="",y="assosciation rating")
+
+p
+
+
+```
+
+
+```{r}
+d1<-d_%>%filter(trial_type=='image-slider-responseMAS')
+d1$trial_index<- as.numeric(d1$trial_index)
+d1$prompt<- as.character(d1$prompt)
+ratings_df <- d1%>%select(trial_index,rt,response, prompt,concept,color_index,subject_id, workerID, color_rgb)
+ratings_df$color_index<- ratings_df$color_index+1
+ratings_df$response<-(ratings_df$response-min(ratings_df$response))/(max(ratings_df$response)-min(ratings_df$response))
+ratings_df<- ratings_df%>%filter(!(subject_id%in% unique(d$subject_id)))
+ratings_df<- ratings_df%>%filter(prompt!= "<p style='width:1000px'>In this experiment yo")
+ratings_df$concept<- as.character(ratings_df$concept) 
+ratings_df$color_rgb<- as.character(ratings_df$color_rgb) 
+ratings_df$color_index<- as.character(ratings_df$color_index)
+```
+
+```{r}
+rd<-ratings_df%>%group_by(prompt,color_index)%>%summarize(mean_rating = mean(response), sem_rating = sd(response)/sqrt(n()) )
+
+
+#rd<- rd%>%filter(prompt%in%c('grape','banana','peach','cherry',
+#                                                'corn','carrot','eggplant','celery',
+#                                              'working','leisure','sleeping','driving',
+#                                              'safety','comfort','efficiency','speed'))
+
+
+rd$prompt <- factor(rd$prompt, levels =c('grape','banana','peach','cherry','apple',
+                                                'corn','carrot','eggplant','celery','mushroom',
+                                              'working','leisure','sleeping','driving','eating',
+                                              'safety','comfort','efficiency','speed','reliability'))
+
+
+
+
+
+
+p<-ggplot(rd,  aes(reorder_within(color_index,-mean_rating, prompt) ,mean_rating, fill =color_index ))+facet_wrap(~prompt,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='black',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text=element_text(size=5), 
+        axis.title=element_text(size=10,face="bold"), 
+        strip.text = element_text(size=10,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=10))+scale_y_continuous(expand = c(0,0)) +labs(x="",y="assosciation rating")+
+  ylim(0,1)
+
+p
+
+
+
+
+
+
+
+#ggsave(
+#  paste0('hillplots.pdf'),
+#  plot = p,
+#  device = "pdf",
+#  scale = 1,
+#  width = 9,
+#  height = 12,
+#  dpi = 150,
+#  limitsize = TRUE
+#)
+```
+
+```{r}
+rdp<- rd%>%group_by(prompt)%>%mutate(rating_prob = mean_rating/sum(mean_rating))
+
+
+
+
+p<-ggplot(rdp,  aes(reorder_within(color_index,-rating_prob, prompt) ,rating_prob, fill =color_index ))+facet_wrap(~prompt,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='black',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text=element_text(size=5), 
+        axis.title=element_text(size=10,face="bold"), 
+        strip.text = element_text(size=10,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=10))+scale_y_continuous(expand = c(0,0)) +labs(x="",y="probability")
+
+p
+
+#ggsave(
+#  paste0('prob_hillplots.pdf'),
+#  plot = p,
+#  device = "pdf",
+#  scale = 1,
+#  width = 9,
+#  height = 24,
+#  dpi = 150,
+#  limitsize = TRUE
+#)
+```
+
+
+
+Exploratory
+```{r}
+library(glmnet)
+
+
+model_set_acc$X<-NULL
+data_set_acc$X<-NULL
+pal_TVS$X<-NULL
+
+colnames(model_set_acc)[3]<-'setwise_dist'
+colnames(data_set_acc)[2]<- 'setwise_acc'
+
+mean_entropies <- model_df%>%group_by(pal_x)%>%summarize(mean_entropy = mean(entropy))%>%select(pal_x,mean_entropy)
+
+
+cor(setwise_acc$total_accuracy,mean_entropies$mean_entropy)
+
+setwise_df <- cbind(mean_entropies, model_set_acc$setwise_dist, data_set_acc$setwise_acc, pal_TVS$TV)
+colnames(setwise_df)<-c('pal','mean_entropy','setwise_dist','setwise_acc','TV')
+
+m1.1<- lm(setwise_acc~setwise_dist+mean_entropy, setwise_df)
+modelSummary(m1.1)
+
+
+m1.2<- lm(setwise_acc~TV+mean_entropy, setwise_df)
+modelSummary(m1.2)
+
+corr.test(setwise_df$setwise_acc,setwise_df$setwise_dist)
+
+corr.test(setwise_df$setwise_acc,setwise_df$mean_entropy)
+
+corr.test(setwise_df$setwise_acc,setwise_df$TV)
+
+reg_df_avg$accuracy_x<- as.numeric(reg_df_avg$accuracy_x)  
+#reg_df_avg$accuracy_x<- if (2) 1 else 0
+reg_df_set<- reg_df_avg%>%select(pal_x,subject_id,accuracy_x,repetition)%>%group_by(subject_id,pal_x,repetition)%>%summarize(total_acc = sum(accuracy_x))
+
+
+reg_df_set$mean_entropy<- c(length(nrow(reg_df_set)))
+reg_df_set$TV<- c(length(nrow(reg_df_set)))
+reg_df_set$setwise_dist<- c(length(nrow(reg_df_set)))
+for(i in 1:nrow(reg_df_set)){
+  reg_df_set$mean_entropy[i]<-setwise_df[setwise_df$pal == reg_df_set$pal_x[i],]$mean_entropy
+  reg_df_set$TV[i]<-setwise_df[setwise_df$pal == reg_df_set$pal_x[i],]$TV
+  reg_df_set$setwise_dist[i]<-setwise_df[setwise_df$pal == reg_df_set$pal_x[i],]$setwise_dist
+  
+  
+}
+
+reg_df_set<-reg_df_set%>%group_by(subject_id,pal_x)%>%summarize(mean_acc = mean(total_acc), mean_entropy = mean(mean_entropy), TV = mean(TV), setwise_dist=mean(setwise_dist))
+reg_df_set
+
+m1.2<- lmer(mean_acc~mean_entropy+setwise_dist+(1|subject_id), reg_df_set)
+summary(m1.2)
+```
+
+
+
+
+
+
