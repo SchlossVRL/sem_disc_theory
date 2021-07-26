@@ -32,26 +32,26 @@ library(lmSupport)
 
 ```{r}
 
-setwd('/Users/kushin/Documents/GitHub/colorability_assignment/')
-clean_df_f <- read.csv('clean_df_f.csv') ### raw data with outliers etc removed.
-cdict<- read.csv('cdict.csv') ### color dict for each concept in each palette
+setwd('/Users/kushin/Documents/GitHub/sem_disc_theory/')
+clean_df_f <- read.csv('data/clean_df_f.csv') ### raw data with outliers etc removed.
+cdict<- read.csv('data/cdict.csv') ### color dict for each concept in each palette
 
 
-item_df = read.csv('item_level_df.csv') ### dataframe with responses at the level of individual trials: 90*64
+item_df = read.csv('data/item_level_df.csv') ### dataframe with responses at the level of individual trials: 90*64
 item_df$X <-NULL
-model_set_acc <- read.csv('model_set_acc.csv')
-data_set_acc <-read.csv('setwise_accuracies.csv')
-pal_TVS <-read.csv('concept_set_TVs.csv')
-d<-read.csv('colorability_raw_2.csv')
-d_<-read.csv('uw71assoc.csv')
-color_dict_df = read.csv('uw_71_color_dict.csv') ### dataframe of all uw71 colors and their corresponding indices
+model_set_acc <- read.csv('data/model_set_acc.csv')
+data_set_acc <-read.csv('data/setwise_accuracies.csv')
+pal_TVS <-read.csv('data/concept_set_TVs.csv')
+d<-read.csv('data/colorability_raw_2.csv')
+d_<-read.csv('data/uw71assoc.csv')
+color_dict_df = read.csv('data/uw_71_color_dict.csv') ### dataframe of all uw71 colors and their corresponding indices
 col2ind<- color_dict_df$index
 names(col2ind)<-color_dict_df$hex
 
-reg_df_avg = read.csv('reg_df_avg.csv')
+reg_df_avg = read.csv('data/reg_df_avg.csv')
 reg_df_avg$X<-NULL
 
-ratings_mat<- read.csv('uw_71_ratings_matrix.csv')
+ratings_mat<- read.csv('data/uw_71_ratings_matrix.csv')
 ratings_mat$X<-as.character(ratings_mat$X)
 
 
@@ -108,7 +108,7 @@ p
 ```
 
 
-Check orrelation between model and human accuracy 
+Check correlation between model and human accuracy 
 ```{r}
 
 
@@ -269,8 +269,8 @@ Some exploratory models
 model_df<- model_df%>%group_by(pal_x)%>%mutate(context_H_sum = sum(sapply(concept_x,get_ents)))
 reg_df_avg<- reg_df_avg%>%group_by(subject_id,pal_x)%>%mutate(context_H_sum = sum(sapply(unique(concept_x),get_ents)))
 
-model_df$context_H_sum <- model_df$context_H_sum - model_df$entropy
-reg_df_avg$context_H_sum <- reg_df_avg$context_H_sum - reg_df_avg$entropy
+model_df$context_H_sum <- model_df$context_H_sum - model_df$entropy_c
+reg_df_avg$context_H_sum <- reg_df_avg$context_H_sum - reg_df_avg$entropy_c
 reg_df_avg$accuracy_x<- factor(reg_df_avg$accuracy_x) # factorizing accuracy for logistic regression models
 
 m1 <- lm(mean_acc~ distance_c+rating, model_df)
@@ -429,16 +429,19 @@ model_df_subj$entropy_z<- (model_df_subj$entropy - mean(model_df_subj$entropy))/
 ```
 
 ```{r}
+#####
+ratings_mat <-read.csv('data/uw71_ratings_mat_no_norm.csv')
+#####
 ratings_mat_df<- as.data.frame(ratings_mat)
 ratings_mat_df%>%pivot_longer(!X,names_to = "color", values_to = "rating")
-ratings_mat_df<- ratings_mat_df%>%filter(X%in%c('grape','banana','peach','cherry',
-                                                'corn','carrot','eggplant','celery',
-                                                'working','leisure','sleeping','driving',
-                                              'safety','comfort','efficiency','speed'))
-ratings_mat_df$X <- factor(ratings_mat_df$X, levels =c('grape','banana','peach','cherry',
-                                                'corn','carrot','eggplant','celery',
-                                                'working','leisure','sleeping','driving',
-                                              'safety','comfort','efficiency','speed'))
+#ratings_mat_df<- ratings_mat_df%>%filter(X%in%c('grape','banana','peach','cherry',
+#                                                'corn','carrot','eggplant','celery',
+#                                                'working','leisure','sleeping','driving',
+#                                              'safety','comfort','efficiency','speed'))
+ratings_mat_df$X <- factor(ratings_mat_df$X, levels =c('grape','banana','peach','cherry','apple',
+                                                'corn','carrot','eggplant','celery','mushroom',
+                                                'working','leisure','sleeping','driving','eating',
+                                              'safety','comfort','efficiency','speed','reliability'))
 
 ratings_mat_df<- ratings_mat_df%>%arrange(X)
 ```
@@ -446,6 +449,7 @@ ratings_mat_df<- ratings_mat_df%>%arrange(X)
 
 Generating hillplots
 ```{r}
+library(tidytext)
 
 ratings_mat_df_long<-ratings_mat_df%>%pivot_longer(!X,names_to = "color", values_to = "rating")
 ratings_mat_df_long$c_ind <-stringr::str_split_fixed(ratings_mat_df_long$color,'V',2)[,2]
@@ -453,20 +457,197 @@ color_dict<- as.character(color_dict_df$hex)
 names(color_dict)<-color_dict_df$index
 
 
-p<-ggplot(ratings_mat_df_long,  aes(reorder_within(c_ind,-rating, X) ,rating, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='black',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+p<-ggplot(ratings_mat_df_long,  aes(reorder_within(c_ind,-rating, X) ,rating, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='NA',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
   theme_classic()+
   theme(legend.position = "none",
          axis.ticks.x=element_blank(),
-        axis.text.x=element_text(angle = 90, size=2.5),
-        axis.text=element_text(size=5), 
+        #axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text.x=element_blank(),
+        axis.text=element_text(size=8), 
         axis.title=element_text(size=10,face="bold"), 
         strip.text = element_text(size=10,face="bold"),
         plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
-  strip.text.x = element_text(size=10))+scale_y_continuous(expand = c(0,0)) +labs(x="",y="assosciation rating")
+  strip.text.x = element_text(size=10))+scale_y_continuous(expand = c(0,0),limits=c(0,1)) +labs(x="UW-71 Colors",y="association rating")
+
+p
+
+ggsave(
+ paste0('sorted_associations.pdf'),
+ plot = p,
+ device = "pdf",
+ scale = 1,
+ width = 8,
+ height = 5,
+ dpi = 150,
+ limitsize = TRUE
+)
+```
+
+
+```{r}
+ratings_mat_df_long_p<- ratings_mat_df_long%>%group_by(X)%>%mutate(rating_prob = rating/sum(rating))
+
+
+p<-ggplot(ratings_mat_df_long_p,  aes(reorder_within(c_ind,-rating_prob, X) ,rating_prob, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='NA',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        #axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text.x = element_blank(),
+        axis.text=element_text(size=12), 
+        axis.title=element_text(size=15,face="bold"), 
+        strip.text = element_text(size=15,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=15))+scale_y_continuous(expand = c(0,0),limits=c(0,0.06)) +labs(x="UW-71 Colors",y="probability")
+p
+
+ggsave(
+ paste0('sorted_probabilities.pdf'),
+ plot = p,
+ device = "pdf",
+ scale = 1,
+ width = 8,
+ height = 5,
+ dpi = 150,
+ limitsize = TRUE
+)
+```
+
+
+
+```{r}
+
+orderC = c('29',
+ '28',
+ '25',
+ '30',
+ '26',
+ '27',
+ '49',
+ '48',
+ '47',
+ '46',
+ '62',
+ '61',
+ '60',
+ '71',
+ '45',
+ '44',
+ '43',
+ '59',
+ '58',
+ '42',
+ '70',
+ '57',
+ '69',
+ '67',
+ '68',
+ '56',
+ '55',
+ '54',
+ '65',
+ '66',
+ '41',
+ '40',
+ '39',
+ '53',
+ '52',
+ '38',
+ '64',
+ '51',
+ '37',
+ '36',
+ '23',
+ '24',
+ '22',
+ '21',
+ '11',
+ '5',
+ '12',
+ '13',
+ '14',
+ '1',
+ '6',
+ '7',
+ '2',
+ '3',
+ '4',
+ '9',
+ '8',
+ '15',
+ '16',
+ '17',
+ '10',
+ '18',
+ '19',
+ '20',
+ '35',
+ '34',
+ '31',
+ '32',
+ '33',
+ '50',
+ '63')
+
+unordered_plot_df <-ratings_mat_df_long
+
+unordered_plot_df$c_ind<- factor(unordered_plot_df$c_ind, levels = orderC)
+p<-ggplot(unordered_plot_df,  aes(c_ind ,rating, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='NA',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        #axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text.x = element_blank(),
+        axis.text=element_text(size=12), 
+        axis.title=element_text(size=15,face="bold"), 
+        strip.text = element_text(size=15,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=15))+scale_y_continuous(expand = c(0,0),limits=c(0,1)) +labs(x="UW-71 Colors",y="association rating")
 
 p
 
 
+ggsave(
+ paste0('unsorted_associations.pdf'),
+ plot = p,
+ device = "pdf",
+ scale = 1,
+ width = 8,
+ height = 5,
+ dpi = 150,
+ limitsize = TRUE
+)
+```
+
+
+
+```{r}
+unordered_plot_df_p <- unordered_plot_df%>%group_by(X)%>%mutate(rating_prob = rating/sum(rating))
+p<-ggplot(unordered_plot_df_p,  aes(c_ind ,rating_prob, fill =c_ind ))+facet_wrap(~X,scales="free_x")+geom_bar(stat='identity',width = 0.85, show.legend = FALSE,color='NA',size=0.05)+scale_fill_manual(values = color_dict)+scale_x_reordered()+
+  theme_classic()+
+  theme(legend.position = "none",
+         axis.ticks.x=element_blank(),
+        #axis.text.x=element_text(angle = 90, size=2.5),
+        axis.text.x = element_blank(),
+        axis.text=element_text(size=12), 
+        axis.title=element_text(size=15,face="bold"), 
+        strip.text = element_text(size=15,face="bold"),
+        plot.title = element_text(hjust = 0.5),strip.background = element_blank(),
+  strip.text.x = element_text(size=15))+scale_y_continuous(expand = c(0,0),limits=c(0,0.06)) +labs(x="UW-71 Colors",y="probability")
+
+p
+
+
+ggsave(
+ paste0('unsorted_probabilities.pdf'),
+ plot = p,
+ device = "pdf",
+ scale = 1,
+ width = 8,
+ height = 5,
+ dpi = 150,
+ limitsize = TRUE
+)
 ```
 
 
@@ -572,7 +753,24 @@ p
 Exploratory
 ```{r}
 library(glmnet)
+library(psych)
 
+temp = c(0.68,
+ 0.927,
+ 0.387,
+ 0.865,
+ 0.928,
+ 0.999,
+ 0.62,
+ 0.573,
+ 0.972,
+ 0.902,
+ 0.59,
+ 0.632,
+ 0.883,
+ 0.702,
+ 0.834,
+ 0.588)
 
 model_set_acc$X<-NULL
 data_set_acc$X<-NULL
@@ -581,13 +779,16 @@ pal_TVS$X<-NULL
 colnames(model_set_acc)[3]<-'setwise_dist'
 colnames(data_set_acc)[2]<- 'setwise_acc'
 
-mean_entropies <- model_df%>%group_by(pal_x)%>%summarize(mean_entropy = mean(entropy))%>%select(pal_x,mean_entropy)
+mean_entropies <- model_df%>%group_by(pal_x)%>%summarize(mean_entropy = mean(entropy_c))%>%select(pal_x,mean_entropy)
 
 
-cor(setwise_acc$total_accuracy,mean_entropies$mean_entropy)
 
 setwise_df <- cbind(mean_entropies, model_set_acc$setwise_dist, data_set_acc$setwise_acc, pal_TVS$TV)
 colnames(setwise_df)<-c('pal','mean_entropy','setwise_dist','setwise_acc','TV')
+
+cor(setwise_df$setwise_acc,setwise_df$setwise_dist)
+
+corr.test(setwise_df$setwise_acc,temp)
 
 m1.1<- lm(setwise_acc~setwise_dist+mean_entropy, setwise_df)
 modelSummary(m1.1)
